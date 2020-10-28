@@ -1,0 +1,146 @@
+# Packages
+
+```{r, message = F}
+library(tidyverse)
+library(gganimate) # For animation
+library(ggthemes)  # For ggplot2 theme_map()
+library(magick)    # For combining gifs
+```
+
+# Read TidyTuesday data
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load(2020, week = 44)
+```
+
+# Select key data
+
+Read in key data and rename variables
+```{r}
+# read in data
+data_all <- tuesdata$`wind-turbine` %>% 
+#rename columns
+  select(id               = objectid, 
+         project_name     = project_name,
+         year             = commissioning_date,
+         capacity_project = total_project_capacity_mw,
+         capacity_turbine = turbine_rated_capacity_k_w,
+         lat              = latitude,
+         lon              = longitude) %>% 
+# assign name to Newfoundland project which is missing name 
+  mutate(project_name = ifelse(
+    id == '1451', 'Newfoundland Project', project_name)) %>% 
+# if commissioning date spans multiple years, take the first year
+  mutate(year = parse_number(year)) %>%
+# arrange by year
+  arrange(year, id)
+```
+
+# Summarise data by project
+
+Assign each project:
+- a location, based on the average of its turbine coordinates;
+- overall capacity (MW), based on final capacity achieved; and
+- start date, based on year first commissioned.
+
+```{r, message = F}
+data_project <- 
+  data_all %>% 
+  group_by(project_name) %>% 
+  summarise(lat = mean(lat),
+            lon = mean(lon),
+            capacity_project = max(capacity_project),
+            year = min(year)) %>% 
+  ungroup() %>%
+  select(year, everything()) %>% 
+  arrange(year, project_name) 
+```
+
+# Animated plots
+
+First plot is a line chart showing cumulative capacity by year
+
+```{r}
+
+a <- data_project %>% 
+  # calculate cumulative capacity by year
+  group_by(year) %>% 
+  summarise(capacity = sum(capacity_project)) %>% 
+  ungroup() %>% 
+  mutate(capacity_cum = cumsum(capacity)) %>% 
+  # produce plot
+  ggplot(aes(x = year, y = capacity_cum)) +
+  geom_line(size = 1, color = 'purple', alpha = 0.5) + 
+  geom_point(size = 2, color = 'purple') + 
+  transition_reveal(along = year, range = c(1992, 2020))+
+  # Add dynamic title that rounds the year to the closest integer
+  labs(title = "Canadian wind turbine capacity:  {round(frame_along, 0)}",
+       x = "Year", 
+       y = "Capacity (MW)")  +
+  # other styling
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size=12))
+
+# produce gif
+a_gif <- animate(a,  duration = 25, start_pause = 10, end_pause = 15, 
+                  height = 400, width = 400)
+
+# save gif
+anim_save("turbines1.gif")
+
+
+```
+
+Second plot is a map showing cumulative capacity for each project by location
+
+```{r}
+b <- data_project %>% 
+  ggplot(aes(x = lon, y = lat, group = project_name, size = capacity_project)) +
+  # Add Canadian borders with a light grey background
+  borders(regions = "Canada",
+          fill = "grey90",
+          colour = "grey90"
+          ) +
+  geom_point(colour = 'purple', alpha = .2) +
+  # range parameter sets the size of each point
+  scale_size_continuous(range = c(1, 12), 
+                        breaks = c(100, 200, 300)) +
+  # Set map projection and theme
+  coord_map() +
+  theme_map() +
+  labs(size = 'Capacity (MW)') +
+  # specify the "year" variable as being used in the animation
+  transition_reveal(along = year, range = c(1992, 2020)) +
+  # add styling
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        legend.position = c(0.8, 0.6),
+        plot.margin=unit(c(1,1,1,0.5),"cm"))
+
+# produce gif
+b_gif <- animate(b, duration = 25, start_pause = 10, end_pause = 15, 
+                 height = 400, width = 400) 
+
+# save gif
+anim_save("turbines2.gif")
+```
+
+# Combine plots
+
+Combines the two plots above into the final gif.
+
+```{r}
+a_mgif <- image_read(a_gif)
+b_mgif <- image_read(b_gif)
+
+new_gif <- image_append(c(a_mgif[1], b_mgif[1]))
+for(i in 2:100){
+  combined <- image_append(c(a_mgif[i], b_mgif[i]))
+  new_gif <- c(new_gif, combined)
+}
+
+# save final gif to file
+image_write(new_gif, "turbines3.gif")
+```
+
